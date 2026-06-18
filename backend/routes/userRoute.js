@@ -6,12 +6,13 @@ import {
     getUsersList,
     getCurrentUser
 } from "../controllers/userController.js"
-import { isAuthenticated } from "../middleware/isAuthenticated.js"
+import { isAuthenticated, authorizeRoles } from "../middleware/isAuthenticated.js"
 
 
 
 const router = express.Router()
 
+// router.post('/register',isAuthenticated, authorizeRoles("admin"),  registerUser)
 router.post('/register', registerUser)
 router.post('/login', loginUser)
 router.post('/logout',isAuthenticated, logoutUser)

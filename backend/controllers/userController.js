@@ -4,103 +4,163 @@ import { pool } from "../database/db.js";
 
 export const registerUser = async (req, res) => {
   try {
-    console.log(req.body);
-    const { user_name, email, password } = req.body;
-    if (!user_name || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "All fields are required",
-      });
-    }
-    const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [
+    const {
       email,
-    ]);
-    if (rows.length > 0) {
+      password,
+      full_name,
+      role_title,
+      center_location,
+    } = req.body;
+
+    if (!email || !password || !full_name || !role_title) {
       return res.status(400).json({
         success: false,
-        message: "User already exists",
+        message:
+          "Email, password, full_name, and role_title are required.",
       });
     }
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const [result] = await pool.query(
-      "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
-      [user_name, email, hashedPassword],
+
+    const [existingUsers] = await pool.query(
+      "SELECT user_id FROM users WHERE email = ?",
+      [email]
     );
 
-    const token = jwt.sign(
-      { id: result.insertId, email: email },
-      process.env.JWT_SECRET,
-      {
-        expiresIn: process.env.JWT_EXPIRES_IN,
-      },
+    if (existingUsers.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "A user with this email already exists.",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const [result] = await pool.query(
+      `
+      INSERT INTO users (
+        email,
+        password_hash,
+        full_name,
+        role_title,
+        center_location
+      )
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      [
+        email,
+        passwordHash,
+        full_name,
+        role_title,
+        center_location || null,
+      ]
     );
+
+    const [users] = await pool.query(
+      `
+      SELECT
+        user_id,
+        email,
+        full_name,
+        role_title,
+        center_location,
+        created_at
+      FROM users
+      WHERE user_id = ?
+      `,
+      [result.insertId]
+    );
+
+    const user = users[0];
 
     return res.status(201).json({
-      token: token,
       success: true,
-      message: "User registered successfully",
+      message: "Staff account created successfully.",
       data: {
-        token,
-        user: {
-          id: result.insertId,
-          name: result.name,
-          email: result.email,
-          role: result.role,
-        },
+        user_id: user.user_id,
+        email: user.email,
+        name: user.full_name,
+        role: user.role_title,
+        center_id: user.center_location,
+        created_at: user.created_at,
       },
     });
   } catch (error) {
+    console.error("registerUser error:", error);
+
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Internal server error.",
     });
   }
 };
 
+
+
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
+
     if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "All fields are required",
+        message: "Email and password are required.",
       });
     }
-    const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [
-      email,
-    ]);
-    if (!rows || rows.length === 0) {
-      return res.status(400).json({
+
+    const [users] = await pool.query(
+      `
+      SELECT
+        user_id,
+        email,
+        password_hash,
+        full_name,
+        role_title,
+        center_location
+      FROM users
+      WHERE email = ?
+      `,
+      [email]
+    );
+
+    if (users.length === 0) {
+      return res.status(401).json({
         success: false,
-        message: "User not found, please register first",
+        message: "Invalid email or password.",
       });
     }
-    const passwordCheck = await bcrypt.compare(password, rows[0].password);
-    if (!passwordCheck) {
-      return res.status(402).json({
+
+    const user = users[0];
+
+    const isPasswordValid = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
         success: false,
-        message: "Incorrect Password",
+        message: "Invalid email or password.",
       });
     }
-    const accessToken = jwt.sign(
-      { id: rows[0].id, email: rows[0].email, role: rows[0].role },
+
+    const token = jwt.sign(
+      {
+        user_id: user.user_id,
+        role: user.role_title,
+      },
       process.env.JWT_SECRET,
       {
-        expiresIn: process.env.JWT_EXPIRES_IN,
-      },
+        expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+      }
     );
 
     return res.status(200).json({
       success: true,
-      message: `Welcome back ${rows[0].name}`,
-      data: {
-        accessToken,
-        user: {
-          id: rows[0].id,
-          name: rows[0].name,
-          email: rows[0].email,
-          role: rows[0].role,
-        },
+      message: "Authentication successful.",
+      token,
+      user: {
+        name: user.full_name,
+        role: user.role_title,
+        center_id: user.center_location,
       },
     });
   } catch (error) {
@@ -114,18 +174,18 @@ export const loginUser = async (req, res) => {
 export const logoutUser = async (req, res) => {
   try {
     // Clear auth-related cookies set by the frontend/server
-    const cookieOptions = {
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-    };
+    // const cookieOptions = {
+    //   path: "/",
+    //   httpOnly: true,
+    //   secure: true,
+    //   sameSite: "none",
+    // };
 
-    res.clearCookie("token", cookieOptions);
-    res.clearCookie("user_name", cookieOptions);
-    res.clearCookie("email", cookieOptions);
-    res.clearCookie("user_id", cookieOptions);
-    res.clearCookie("role", cookieOptions);
+    // res.clearCookie("token", cookieOptions);
+    // res.clearCookie("user_name", cookieOptions);
+    // res.clearCookie("email", cookieOptions);
+    // res.clearCookie("user_id", cookieOptions);
+    // res.clearCookie("role", cookieOptions);
 
     return res.status(200).json({
       success: true,
@@ -159,25 +219,47 @@ export const getUsersList = async (req, res) => {
 export const getCurrentUser = async (req, res) => {
   try {
     const userId = req.userId;
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const [users] = await pool.query(
+      `
+      SELECT
+        user_id,
+        email,
+        full_name,
+        role_title,
+        center_location
+      FROM users
+      WHERE user_id = ?
+      `,
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
     }
 
-    const [rows] = await pool.query("SELECT id, name,email,avatar_url FROM users WHERE id = ?", [
-      userId,
-    ]);
+    const user = users[0];
 
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    const user = { ...rows[0] };
-
-    return res.status(200).json({ success: true, data: user });
+    return res.status(200).json({
+      success: true,
+      data: {
+        user_id: user.user_id,
+        email: user.email,
+        name: user.full_name,
+        role: user.role_title,
+        center_id: user.center_location,
+      },
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
-};  
+};
 
 
 
